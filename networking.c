@@ -1,5 +1,5 @@
-
 #include "networking.h"
+#include <math.h>
 
 bool InitNetwork(void) {
 #ifdef _WIN32
@@ -33,7 +33,9 @@ static bool SetNonBlocking(socket_t sock, bool nonblocking) {
 ServerAddress ParseAddressFromString(const char *address) {
     ServerAddress result = {0};
 
-    result.valid = sscanf(address, "%15[^:]:%d", result.ip, &result.port) == 2;
+    char *end;
+    while (address)
+        result.valid = sscanf(address, "%15[^:]:%d", result.ip, &result.port) == 2;
     return result;
 }
 
@@ -75,14 +77,14 @@ ServerInstance *Server_Create(uint16_t startPort, iclient_t maxClients) {
     server->port = (uint16_t)ntohs(address.sin_port);
     server->maxClients = maxClients;
     server->socket = server_fd;
-    server->maxClients = calloc(sizeof(ServerClientData), maxClients);
+    server->clients = calloc(maxClients, sizeof(ServerClientData));
 
-    if (server->maxClients == NULL) {
+    if (server->clients == NULL) {
         free(server);
         return NULL;
     }
 
-    return server_fd;
+    return server;
 }
 
 ServerClientData *Server_AcceptNewClient(ServerInstance *server) {
@@ -111,6 +113,7 @@ ServerClientData *Server_AcceptNewClient(ServerInstance *server) {
             clients[i].index = i;
             clients[i].active = true;
             clients[i].bufferedMessage = NULL;
+
             return &clients[i];
         }
     }
@@ -120,46 +123,89 @@ ServerClientData *Server_AcceptNewClient(ServerInstance *server) {
     return NULL;
 }
 
-void Server_ListenToClient(ServerInstance *server, iclient_t clientIndex) {
-    ServerClientData client = server->clients[clientIndex];
+SocketMessage *Server_ListenToClient(ServerInstance *server, iclient_t clientIndex) {
+    ServerClientData *client = &server->clients[clientIndex];
 
     char buffer[SERVER_LISTEN_BUFFER_PER_CLIENT];
 
     int n;
-    if (client.bufferedMessage != NULL) {
-        memcpy(buffer, client.bufferedMessage, client.bufferedMessageSize);
-        free(client.bufferedMessage);
+    if (client->bufferedMessage != NULL) {
+        memcpy(buffer, client->bufferedMessage, client->bufferedMessageSize);
 
-        n = recv(client.socket, (char *)buffer + client.bufferedMessageSize, sizeof(buffer) - client.bufferedMessageSize, 0);
+        n = client->bufferedMessageSize;
+        n += recv(client->socket, (char *)buffer + client->bufferedMessageSize, sizeof(buffer) - client->bufferedMessageSize, 0);
+
+        free(client->bufferedMessage);
+        client->bufferedMessage = NULL;
+        client->bufferedMessageSize = 0;
     } else {
-        n = recv(client.socket, buffer, sizeof(buffer), 0);
+        n = recv(client->socket, buffer, sizeof(buffer), 0);
     }
 
     if (n > 0) {
-        int offset = 0;
+        int offset = client->skipNextSize;
+        client->skipNextSize = 0;
 
         while (offset < n) {
             SocketMessageHeader header = *(SocketMessageHeader *)&(buffer[offset]);
+            header.length = ntohll(header.length);
+            header.messageType = (messagetype_t)ntohll((uint64_t)header.messageType);
 
-            PushClientMessage(clients[i].id, &(buffer[offset + sizeof(size_t) + 1]), length - sizeof(size_t) - 1);
+            size_t fullLength = header.length + sizeof(SocketMessageHeader);
 
-            offset += length;
+            // couldn't possible fit this
+            if (fullLength > SERVER_LISTEN_BUFFER_PER_CLIENT) {
+                //                    full msg size - already read part
+                client->skipNextSize = fullLength - (SERVER_LISTEN_BUFFER_PER_CLIENT - offset);
+                printf("!!! Message too big (length=%d) from client index=%d", fullLength, client->index);
+                return NULL;
+            }
+
+            // message outside of bounds of buffer
+            if (offset + fullLength > SERVER_LISTEN_BUFFER_PER_CLIENT) {
+                size_t bufferSize = SERVER_LISTEN_BUFFER_PER_CLIENT - (fullLength + offset);
+
+                client->bufferedMessage = malloc(bufferSize);
+                if (client->bufferedMessage == NULL) {
+                    printf("Could allocate %d bytes", bufferSize);
+                    return NULL;
+                }
+                memcpy(client->bufferedMessage, &buffer[offset], bufferSize);
+
+                client->bufferedMessageSize = bufferSize;
+                return NULL;
+            }
+
+            SocketMessage *result = malloc(sizeof(SocketMessageHeader) + header.length);
+            if (result == NULL) {
+                printf("Could allocate %d bytes", sizeof(SocketMessageHeader) + header.length);
+                return NULL;
+            }
+
+            memcpy(result, &header, sizeof(SocketMessageHeader));
+            memcpy(result->data, &buffer[offset], header.length);
+
+            offset += fullLength;
         }
+
     } else if (n == 0) {
-        shutdown(client.socket, SHUT_WR);
-        CLOSE_SOCKET(client.socket);
-        client.active = false;
+        shutdown(client->socket, SHUT_WR);
+        CLOSE_SOCKET(client->socket);
+        client->active = false;
 
         // It is always true, but it looks clearer
     } else if (n == SOCKET_ERROR) {
         int err = GET_ERROR();
 
         if (err != WOULDBLOCK && err != EAGAIN) {
-            printf("Client #%u error: %d\n", client.index, err);
-            CLOSE_SOCKET(client.socket);
-            client.active = false;
+            printf("Client #%u error: %d\n", client->index, err);
+            CLOSE_SOCKET(client->socket);
+            client->active = false;
         }
     }
+}
+
+void Server_CleanUp(ServerInstance *server) {
 }
 
 void Server_Listen(ServerInstance *server) {

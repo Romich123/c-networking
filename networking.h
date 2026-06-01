@@ -1,3 +1,7 @@
+/*
+ * This does NOT do little-endian/big-endian conversions
+ */
+
 #pragma once
 
 #ifndef SOCKETS_CONTENT_HEADER
@@ -8,7 +12,6 @@
 #include <string.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <cmath>
 
 #ifdef _WIN32
 
@@ -71,6 +74,7 @@ typedef struct ServerClientData {
     // so this will save some between listen calls
     char *bufferedMessage;
     size_t bufferedMessageSize;
+    size_t skipNextSize;
 } ServerClientData;
 
 typedef struct ServerInstance {
@@ -81,12 +85,19 @@ typedef struct ServerInstance {
 } ServerInstance;
 
 typedef struct SocketMessageHeader {
+    // stores length of data only, not including header
     size_t length;
     messagetype_t messageType;
 } SocketMessageHeader;
 
+typedef struct SocketMessage {
+    struct SocketMessageHeader;
+    char data[];
+} SocketMessage;
+
 // If `maxClients` = 0, then it set to `MAX_SERVER_CLIENTS`
-ServerInstance *Server_Create(uint16_t startPort, iclient_t maxClients);
+// If `port` = 0, then available port chosen (based on OS)
+ServerInstance *Server_Create(uint16_t port, iclient_t maxClients);
 void Server_CleanUp(ServerInstance *server);
 
 ServerClientData *Server_AcceptNewClient(ServerInstance *server);
