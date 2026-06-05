@@ -1,7 +1,3 @@
-/*
- * This does NOT do little-endian/big-endian conversions
- */
-
 #pragma once
 
 #ifndef SOCKETS_CONTENT_HEADER
@@ -32,12 +28,14 @@ typedef SOCKET socket_t;
 
 #else
 
+#include <errno.h>
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/select.h>
+#include <endian.h>
 typedef int socket_t;
 #define CLOSE_SOCKET(s) close(s)
 #define INVALID_SOCKET -1
@@ -45,18 +43,27 @@ typedef int socket_t;
 #define GET_ERROR() errno
 #define WOULDBLOCK EWOULDBLOCK
 #define INPROGRESS EINPROGRESS
+#define htonll htobe64
+#define ntohll be64toh
 
 #endif
 
 typedef uint16_t iclient_t;
+// should be unsigned
 typedef uint8_t messagetype_t;
 
-#define MAX_SERVER_CLIENTS (1 << (sizeof(iclient_t) * 8))
-#define SERVER_LISTEN_BUFFER_PER_CLIENT (8 * 1024)
-#define MAX_SOCKET_MESSAGE_SIZE (1024)
+_Static_assert(
+    sizeof(messagetype_t) == 1 ||
+        sizeof(messagetype_t) == 2 ||
+        sizeof(messagetype_t) == 4 ||
+        sizeof(messagetype_t) == 8,
+    "Unsupported messagetype_t size");
 
-bool InitNetwork(void);
-void CleanupNetwork(void);
+// it underflows, so this is maximum addressable index
+#define MAX_SERVER_CLIENTS ((iclient_t)(-1))
+#define SERVER_LISTEN_BUFFER_PER_CLIENT (8 * 1024)
+
+#define CLIENT_LISTEN_BUFFER (8 * 1024)
 
 typedef struct ServerAddress {
     char ip[INET6_ADDRSTRLEN];
@@ -64,58 +71,89 @@ typedef struct ServerAddress {
     bool valid;
 } ServerAddress;
 
-ServerAddress ParseAddressFromString(const char *address);
-
 typedef struct ServerClientData {
     socket_t socket;
     iclient_t index;
     bool active;
     // recv can return incomplete data
     // so this will save some between listen calls
-    char *bufferedMessage;
-    size_t bufferedMessageSize;
-    size_t skipNextSize;
+    char *recvBuffered;
+    size_t recvBufferedSize;
+    size_t skipNextReceiveSize;
+    // if send returns WOULDBLOCK
+    char *sendBuffered;
+    size_t sendBufferedSize;
 } ServerClientData;
 
 typedef struct ServerInstance {
     socket_t socket;
     ServerClientData *clients;
+    // shouldn't change it after creation
     iclient_t maxClients;
+    // stored for performance reasons
+    // so instead of looping through all clients
+    // it could loop until this
+    iclient_t activeClientsBefore;
+    // could also save minimal inactive client?
+    // probably won't matter as much
+    // because this all is intended for game networking
+    // and usually player are connected for a long time
     uint16_t port;
 } ServerInstance;
 
 typedef struct SocketMessageHeader {
     // stores length of data only, not including header
-    size_t length;
+    uint64_t size;
     messagetype_t messageType;
 } SocketMessageHeader;
+
+#define NETWORK_SOCKET_MESSAGE_HEADER (sizeof(uint64_t) + sizeof(messagetype_t))
 
 typedef struct SocketMessage {
     struct SocketMessageHeader;
     char data[];
 } SocketMessage;
 
+typedef struct SocketMessageFromClient {
+    iclient_t clientIndex;
+    SocketMessage *message;
+} SocketMessageFromClient;
+
+ServerAddress ParseAddressIPv4(const char *address);
+
+bool InitNetwork(void);
+void CleanupNetwork(void);
+
 // If `maxClients` = 0, then it set to `MAX_SERVER_CLIENTS`
-// If `port` = 0, then available port chosen (based on OS)
 ServerInstance *Server_Create(uint16_t port, iclient_t maxClients);
 void Server_CleanUp(ServerInstance *server);
 
 ServerClientData *Server_AcceptNewClient(ServerInstance *server);
-void Server_Listen(ServerInstance *server);
+void Server_DisconnectClient(ServerInstance *server, iclient_t clientIndex);
 
-bool Server_Broadcast(ServerInstance *server);
-bool Server_SendTo(ServerInstance *server, ServerClientData *client, char *data, size_t len);
+SocketMessage *Server_ListenToClient(ServerInstance *server, iclient_t clientIndex);
+SocketMessageFromClient Server_Listen(ServerInstance *server);
+
+int Server_Broadcast(ServerInstance *server, uint64_t size, messagetype_t msgType, const char *message);
+int Server_SendTo(ServerInstance *server, iclient_t clientIndex, uint64_t size, messagetype_t msgType, const char *message);
 
 typedef struct ClientInstance {
     socket_t socket;
+
+    // recv can return incomplete data
+    // so this will save some between listen calls
+    char *recvBuffered;
+    size_t recvBufferedSize;
+    size_t skipNextReceiveSize;
+    // if send returns WOULDBLOCK
+    char *sendBuffered;
+    size_t sendBufferedSize;
 } ClientInstance;
 
-ClientInstance Client_Create(ServerAddress address);
-void Client_Listen(ServerInstance *server);
+ClientInstance *Client_Create(ServerAddress address);
 void Client_CleanUp(ClientInstance *client);
 
-bool Client_Send();
-
-void Debug_PrintMessage(char *buffer, size_t offset);
+SocketMessage *Client_Listen(ClientInstance *client);
+int Client_Send(ClientInstance *client, uint64_t size, messagetype_t msgType, const char *message);
 
 #endif
