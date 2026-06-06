@@ -640,7 +640,6 @@ SocketMessage *Client_Listen(ClientInstance *client) {
         return NULL;
     }
 
-    TryParseMessage(buffer, n, &client->recvBuffered, &client->recvBufferedSize);
     SocketMessageHeader header;
     memcpy(&header.size, &buffer[offset], sizeof(header.size));
     memcpy(&header.messageType, &buffer[offset + sizeof(header.size)], sizeof(messagetype_t));
