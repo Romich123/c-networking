@@ -74,22 +74,6 @@ static SocketMessage *TryParseMessage(char *buffer, uint64_t n, char **remaining
     return msg;
 }
 
-// should be optimized away
-// so shouldn't cause any performance change
-// clang-format off
-#define ntohmt(x)                            \
-    (sizeof(messagetype_t) == 1 ? (x)      : \
-     sizeof(messagetype_t) == 2 ? ntohs(x) : \
-     sizeof(messagetype_t) == 4 ? ntohl(x) : \
-                                  ntohll(x))
-
-#define htonmt(x)                            \
-    (sizeof(messagetype_t) == 1 ? (x)      : \
-     sizeof(messagetype_t) == 2 ? htons(x) : \
-     sizeof(messagetype_t) == 4 ? htonl(x) : \
-                                  htonll(x))
-// clang-format on
-
 ServerInstance *Server_Create(uint16_t startPort, iclient_t maxClients) {
     socket_t server_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 

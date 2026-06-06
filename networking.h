@@ -26,6 +26,14 @@ typedef SOCKET socket_t;
 #define INPROGRESS WSAEWOULDBLOCK // On Windows, same as WOULDBLOCK
 #define SHUT_WR SD_SEND
 
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+#define htonll(x) (x)
+#define ntohll(x) (x)
+#else
+#define htonll(x) (((uint64_t)htonl((x) & 0xFFFFFFFF) << 32) | htonl((x) >> 32))
+#define ntohll(x) (((uint64_t)ntohl((x) & 0xFFFFFFFF) << 32) | ntohl((x) >> 32))
+#endif
+
 #else
 
 #include <errno.h>
@@ -51,6 +59,22 @@ typedef int socket_t;
 typedef uint16_t iclient_t;
 // should be unsigned
 typedef uint8_t messagetype_t;
+
+// should be optimized away
+// so shouldn't cause any performance change
+// clang-format off
+#define ntohmt(x)                            \
+    (sizeof(messagetype_t) == 1 ? (x)      : \
+     sizeof(messagetype_t) == 2 ? ntohs(x) : \
+     sizeof(messagetype_t) == 4 ? ntohl(x) : \
+                                  ntohll(x))
+
+#define htonmt(x)                            \
+    (sizeof(messagetype_t) == 1 ? (x)      : \
+     sizeof(messagetype_t) == 2 ? htons(x) : \
+     sizeof(messagetype_t) == 4 ? htonl(x) : \
+                                  htonll(x))
+// clang-format on
 
 _Static_assert(
     sizeof(messagetype_t) == 1 ||
@@ -110,7 +134,9 @@ typedef struct SocketMessageHeader {
 #define NETWORK_SOCKET_MESSAGE_HEADER (sizeof(uint64_t) + sizeof(messagetype_t))
 
 typedef struct SocketMessage {
-    struct SocketMessageHeader;
+    // stores length of data only, not including header
+    uint64_t size;
+    messagetype_t messageType;
     char data[];
 } SocketMessage;
 
