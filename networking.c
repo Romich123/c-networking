@@ -120,7 +120,21 @@ ServerInstance *Server_Create(uint16_t startPort, iclient_t maxClients) {
         return NULL;
     }
 
-    server->port = (uint16_t)ntohs(address.sin_port);
+    struct sockaddr_in sin;
+    socklen_t len = sizeof(sin);
+
+    if (startPort == 0) {
+        if (getsockname(server_fd, (struct sockaddr *)&sin, &len) == -1) {
+            CLOSE_SOCKET(server_fd);
+            free(server);
+            return NULL;
+        } else {
+            server->port = ntohs(sin.sin_port);
+        }
+    } else {
+        server->port = (uint16_t)ntohs(address.sin_port);
+    }
+
     server->maxClients = maxClients;
     server->socket = server_fd;
     server->activeClientsBefore = 0;
@@ -500,6 +514,49 @@ int Server_Broadcast(ServerInstance *server, uint64_t size, messagetype_t msgTyp
     return lastError;
 }
 
+int Server_FlushClient(ServerInstance *server, iclient_t clientIndex) {
+    ServerClientData *client = &server->clients[clientIndex];
+
+    if (client->sendBuffered == NULL || client->sendBufferedSize == 0)
+        return 0;
+
+    uint64_t sent = 0;
+
+    while (sent < client->sendBufferedSize) {
+        int result = send(client->socket, client->sendBuffered + sent, client->sendBufferedSize - sent, 0);
+
+        if (result > 0) {
+            sent += result;
+            continue;
+        }
+
+        if (result == SOCKET_ERROR) {
+            int err = GET_ERROR();
+
+            if (err == WOULDBLOCK || err == EAGAIN) {
+                if (sent > 0) {
+                    uint64_t remaining = client->sendBufferedSize - sent;
+
+                    memmove(client->sendBuffered, client->sendBuffered + sent, remaining);
+
+                    client->sendBufferedSize = remaining;
+                }
+
+                return WOULDBLOCK;
+            }
+
+            Server_DisconnectClient(server, clientIndex);
+            return err;
+        }
+    }
+
+    free(client->sendBuffered);
+    client->sendBuffered = NULL;
+    client->sendBufferedSize = 0;
+
+    return 0;
+}
+
 ClientInstance *Client_Create(ServerAddress address) {
     socket_t sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock == INVALID_SOCKET) {
@@ -785,5 +842,45 @@ int Client_Send(ClientInstance *client, uint64_t size, messagetype_t msgType, co
     }
 
     free(buffer);
+    return 0;
+}
+
+int Client_Flush(ClientInstance *client) {
+    if (client->sendBuffered == NULL || client->sendBufferedSize == 0)
+        return 0;
+
+    uint64_t sent = 0;
+
+    while (sent < client->sendBufferedSize) {
+        int result = send(client->socket, client->sendBuffered + sent, client->sendBufferedSize - sent, 0);
+
+        if (result > 0) {
+            sent += result;
+            continue;
+        }
+
+        if (result == SOCKET_ERROR) {
+            int err = GET_ERROR();
+
+            if (err == WOULDBLOCK || err == EAGAIN) {
+                if (sent > 0) {
+                    uint64_t remaining = client->sendBufferedSize - sent;
+
+                    memmove(client->sendBuffered, client->sendBuffered + sent, remaining);
+
+                    client->sendBufferedSize = remaining;
+                }
+
+                return WOULDBLOCK;
+            }
+
+            return err;
+        }
+    }
+
+    free(client->sendBuffered);
+    client->sendBuffered = NULL;
+    client->sendBufferedSize = 0;
+
     return 0;
 }

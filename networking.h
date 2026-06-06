@@ -162,6 +162,7 @@ SocketMessageFromClient Server_Listen(ServerInstance *server);
 
 int Server_Broadcast(ServerInstance *server, uint64_t size, messagetype_t msgType, const char *message);
 int Server_SendTo(ServerInstance *server, iclient_t clientIndex, uint64_t size, messagetype_t msgType, const char *message);
+int Server_FlushClient(ServerInstance *server, iclient_t clientIndex);
 
 typedef struct ClientInstance {
     socket_t socket;
@@ -181,5 +182,6 @@ void Client_CleanUp(ClientInstance *client);
 
 SocketMessage *Client_Listen(ClientInstance *client);
 int Client_Send(ClientInstance *client, uint64_t size, messagetype_t msgType, const char *message);
+int Client_Flush(ClientInstance *client);
 
 #endif
