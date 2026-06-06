@@ -557,6 +557,15 @@ int Server_FlushClient(ServerInstance *server, iclient_t clientIndex) {
     return 0;
 }
 
+int Server_Flush(ServerInstance *server) {
+    for (iclient_t i = 0; i < server->activeClientsBefore; i++) {
+        if (!server->clients[i].active)
+            continue;
+
+        Server_FlushClient(server, i);
+    }
+}
+
 ClientInstance *Client_Create(ServerAddress address) {
     socket_t sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock == INVALID_SOCKET) {
